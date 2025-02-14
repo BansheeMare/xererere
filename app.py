@@ -1,7 +1,7 @@
 from flask import Flask, jsonify, request, send_file, session, redirect, url_for
 import modules.manager as manager
 import asyncio, json, requests, datetime, time
-import mercadopago
+import mercadopago, os, signal
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters, ConversationHandler
 from multiprocessing import Process
@@ -219,13 +219,16 @@ def view():
     return redirect(url_for('login'))
 
 @app.route('/delete/<id>', methods=['DELETE'])
-def delete(id):
+async def delete(id):
     if session.get("auth", False):
-        processes[id].kill()
         open('blacklist.txt', 'a').write(str(bots_data[id]['owner'])+'\n')
-        processes.pop(id)
-        bots_data.pop(id)
-        manager.update_bot_token()
+        if id in processes.keys():
+            processes.pop(id)
+        if id in bots_data:
+            bots_data.pop(id)
+        
+        manager.update_bot_config(id, [])
+        manager.update_bot_token(id, f'BANIDO-{id}')
         return 'true'
     else:
         return 403
@@ -243,9 +246,10 @@ def login():
             <p><input type="submit" value="Entrar"></p>
         </form>
     '''
-
+#
 def start_bot(new_token, bot_id):
     """Inicia um novo bot em um processo separado."""
+    bot_id = str(bot_id)
     if not str(bot_id) in processes.keys():
         
         #process = asyncio.run(main_start(new_token, bot_id))
@@ -327,16 +331,6 @@ def start_register():
     register = Process(target=main)
     register.start()
 
-@app.route('/start/<id>', methods=['get'])
-def start(id):
-    bot = manager.get_bot_by_id(id)
-    if id in processes and processes[id].is_alive():
-        print(f"Bot {id} já está em execução. Ignorando nova inicialização.")
-        return '', 400
-    bot = manager.get_bot_by_id(id)
-    start_bot(bot[1], id)
-    print(f"Bot {id} iniciado com sucesso.")
-    return '', 200
 
 @app.route('/dashboard-data', methods=['GET'])
 def get_dashboard_data():
@@ -346,19 +340,29 @@ def get_dashboard_data():
         dashboard_data['salesCount'] = len(manager.get_all_payments_by_status('finished'))
         return jsonify(dashboard_data)
 
+
 @app.route('/bots', methods=['GET'])
 def bots():
     if session.get("auth", False):
+        bot_list = manager.get_all_bots()
+        
         bots = []
-        for i in bots_data.keys():
-            print(i)
-            bot = manager.get_bot_by_id(i)
 
-            bots_data[i]['data'] = json.loads(bot[3])
-            bots.append(bots_data[i])
-
-        return jsonify(bots)
-
+        for bot in bot_list:
+            bot_details = manager.check_bot_token(bot[1])
+            bot_structure = {
+            'id': bot[0],
+            'token': bot[1],
+            'url':"Token Invalido",
+            'owner': bot[2],
+            'data': json.loads(bot[3])
+            }
+            if bot_details:
+                bot_structure['url'] = f'https://t.me/{bot_details['result'].get('username', "INDEFINIDO")}',
+        
+            bots_data[bot[0]] = bot_structure
+            bots.append(bots_data[bot[0]])
+        return bots
 
 @app.route('/terminal', methods=['POST'])
 def terminal():
